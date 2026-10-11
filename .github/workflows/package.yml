@@ -248,3 +248,56 @@ jobs:
           path: ${{ runner.temp }}/package/
           if-no-files-found: error
           retention-days: 30
+
+  # Keep write-capable attestation credentials away from npm ci, prepack and any PR code.
+  # Fork PRs have no write token; only a trusted main push or manual dispatch attests.
+  attest:
+    name: Attest package and SBOM
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download verified package, SBOM and checksums
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package-sbom-sha256
+          path: ${{ runner.temp }}/verified-package
+      - name: Verify downloaded artifact checksums
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/verified-package"
+          test "$(find . -maxdepth 1 -type f -name '*.tgz' | wc -l)" -eq 1
+          tarball="$(find . -maxdepth 1 -type f -name '*.tgz' -printf '%f\n')"
+          for file in "$tarball" m365-graph-mcp.cdx.json SHA256SUMS TOOLCHAIN; do
+            test -f "$file" && test ! -L "$file"
+          done
+          # Check all top-level entries, not merely regular files: no extra symlinks or dirs.
+          actual="$(find . -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
+          expected="$(printf '%s\n' "$tarball" m365-graph-mcp.cdx.json SHA256SUMS TOOLCHAIN | LC_ALL=C sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::unexpected downloaded package entries"
+            exit 1
+          fi
+          # Three entries alone are insufficient: each expected file must have the right digest
+          # and the exact, non-repeated manifest ordering produced by the package job.
+          if ! diff -u SHA256SUMS <(sha256sum -- "$tarball" m365-graph-mcp.cdx.json TOOLCHAIN); then
+            echo "::error::checksum manifest does not cover the exact expected package, SBOM and toolchain"
+            exit 1
+          fi
+          sha256sum --check --strict SHA256SUMS
+      - name: Attest package and SBOM build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/verified-package/*.tgz
+            ${{ runner.temp }}/verified-package/m365-graph-mcp.cdx.json
+      - name: Attest package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/verified-package/*.tgz
+          sbom-path: ${{ runner.temp }}/verified-package/m365-graph-mcp.cdx.json
