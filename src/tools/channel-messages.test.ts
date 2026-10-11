@@ -339,7 +339,7 @@ describe(LIST, () => {
     expect(a?.body["contentType"]).toBe("text");
     expect(a?.body["sourceContentType"]).toBe("html");
     expect(a?.body["content"]).not.toMatch(/<|alert\(1\)/);
-    expect(text).not.toMatch(/<div>|<script>/);
+    expect(text).not.toMatch(/<div>|<script>/i);
     expect(b?.body["truncated"]).toBe(true);
     expect((b?.body["content"] as string).endsWith(TRUNCATION_MARKER)).toBe(true);
     expect((b?.body["content"] as string).length).toBeLessThanOrEqual(
