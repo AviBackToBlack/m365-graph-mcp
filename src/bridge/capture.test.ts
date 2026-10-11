@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CdpPipe } from "./cdp-pipe.js";
 import { GraphExplorerCapture, extractBearer, isGraphExplorerUrl } from "./capture.js";
 import type { CaptureDiagnostic } from "./capture.js";
@@ -440,19 +440,29 @@ describe("capture: claim release, re-attachment and attach race", () => {
     sent(e, "Target.attachToTarget").map((m) => (m.params as { targetId: string }).targetId);
 
   it("retries a failed attach after the delay, so an idle signed-in page is still claimed", async () => {
-    const e = await setup({ attachFails: true, attachRetryMs: 5 });
-    expect(e.diags.some((d) => d.kind === "attach_failed")).toBe(true);
-    expect(attachedTargets(e)).toEqual(["T1"]);
-    // The page stays idle (no further target events); the retry rescans and attaches.
-    e.peer.on("Target.attachToTarget", () => ({ sessionId: "S1" }));
-    await new Promise((r) => setTimeout(r, 40));
-    await flush();
-    expect(attachedTargets(e)).toEqual(["T1", "T1"]);
-    const t = jwt();
-    request(e, "a", t);
-    respond(e, "a", 200);
-    await flush();
-    expect(e.cap.current()).toMatchObject({ state: "ok", token: t });
+    // Freeze retry timers while setup awaits CDP traffic: a real 5-ms timeout may fire before
+    // the first assertion on a busy runner, causing a spurious duplicate attach.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let e: Env | undefined;
+    try {
+      e = await setup({ attachFails: true, attachRetryMs: 5 });
+      expect(e.diags.some((d) => d.kind === "attach_failed")).toBe(true);
+      expect(attachedTargets(e)).toEqual(["T1"]);
+      // The page stays idle (no further target events); only advancing the retry clock
+      // causes a rescan, proving that the retry does not depend on incidental wall-clock delays.
+      e.peer.on("Target.attachToTarget", () => ({ sessionId: "S1" }));
+      await vi.advanceTimersByTimeAsync(5);
+      await flush();
+      expect(attachedTargets(e)).toEqual(["T1", "T1"]);
+      const t = jwt();
+      request(e, "a", t);
+      respond(e, "a", 200);
+      await flush();
+      expect(e.cap.current()).toMatchObject({ state: "ok", token: t });
+    } finally {
+      e?.cap.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("retries a rescan whose Target.getTargets failed", async () => {
