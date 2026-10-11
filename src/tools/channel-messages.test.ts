@@ -801,7 +801,7 @@ describe("graph-batch reachability", () => {
     const l = await batch(`${BASE}/messages?$top=20`.replace(CID, ECID));
     expect(l.env.ok).toBe(true);
     expect(batchBody(l)?.value).toEqual(single);
-    expect(l.text).not.toMatch(/secret|alert\(1\)|<div>/);
+    expect(l.text).not.toMatch(/secret|alert\(1\)|<div>/i);
     expect(JSON.stringify(single)).toContain("[image hostedContentId=abc]");
 
     for (const id of [ECID, CID]) {
@@ -809,7 +809,7 @@ describe("graph-batch reachability", () => {
       const g = await batch(`/teams/${TID}/channels/${id}/messages/${MID}`);
       expect(g.env.ok, id).toBe(true);
       expect(batchBody(g)).toEqual(projectChannelMessage(raw, GET_BODY_MAX_CHARS));
-      expect(g.text).not.toMatch(/secret|alert\(1\)|<div>/);
+      expect(g.text).not.toMatch(/secret|alert\(1\)|<div>/i);
     }
 
     const reply = msg({ id: RID, replyToId: MID, etag: "etag-secret" });
