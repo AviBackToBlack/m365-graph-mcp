@@ -14,7 +14,7 @@ Local validation requires Node.js 22.12+:
 
 ### Pull request readiness
 
-The protected default branch accepts changes through reviewed pull requests, not direct pushes. Before proposing a merge, confirm the required check contexts are successful: validate, Semgrep, gitleaks, OSV-Scanner, npm audit, and SBOM and hashes. Resolve applicable review threads and address substantive findings before the final review decision.
+The protected default branch accepts changes through reviewed pull requests, not direct pushes. Before proposing a merge, confirm the required checks shown by GitHub are successful (currently validate, Semgrep, gitleaks, OSV-Scanner, npm audit, and SBOM and hashes); the active branch rulesets are authoritative if this list changes. Code ownership is declared in .github/CODEOWNERS. Resolve applicable review threads and address substantive findings before the final review decision.
 
 Use squash merge for accepted changes. Passing automated checks or receiving a review recommendation does not authorize merging; an explicit maintainer decision is a separate gate.
 
