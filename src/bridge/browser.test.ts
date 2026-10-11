@@ -193,6 +193,28 @@ describe("browser launch", () => {
     expect(options.env.HOME).toBe("/Users/u");
   });
 
+  it("does not forward prototype-like environment keys to Chrome", () => {
+    const child = fakeChild();
+    const spawnFn = vi.fn(() => child as unknown as ChildProcess);
+    const env = Object.fromEntries([
+      ["PATH", "/usr/bin"],
+      ["__proto__", "untrusted"],
+      ["constructor", "untrusted"],
+      ["prototype", "untrusted"],
+      ["M365_GRAPH_ACCESS_TOKEN", "SECRET-CANARY"],
+    ]);
+    launchBrowser({ ...opts(spawnFn as unknown as SpawnFn), env });
+    const browserEnv = (
+      spawnFn.mock.calls[0] as unknown as [unknown, unknown, { env: NodeJS.ProcessEnv }]
+    )[2].env;
+    expect(browserEnv.PATH).toBe("/usr/bin");
+    expect(Object.hasOwn(browserEnv, "__proto__")).toBe(false);
+    expect(Object.hasOwn(browserEnv, "constructor")).toBe(false);
+    expect(Object.hasOwn(browserEnv, "prototype")).toBe(false);
+    expect(browserEnv.M365_GRAPH_ACCESS_TOKEN).toBeUndefined();
+    expect(Object.getPrototypeOf(browserEnv)).toBe(Object.prototype);
+  });
+
   it("kills the child when the CDP pipes are missing, so no browser keeps holding the profile", () => {
     const child = fakeChild();
     child.stdio = [null, null, new PassThrough(), null, null];

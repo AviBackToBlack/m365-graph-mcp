@@ -242,10 +242,17 @@ export class BrowserProcess {
 export function launchBrowser(options: LaunchOptions): BrowserProcess {
   const spawnFn: SpawnFn = options.spawnFn ?? (nodeSpawn as unknown as SpawnFn);
   // The bridge's own configuration is not handed to the browser.
-  const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(options.env ?? process.env)) {
-    if (!k.startsWith("M365_GRAPH_")) env[k] = v;
-  }
+  // Object.fromEntries avoids prototype setters for externally supplied environment keys.
+  // Ignore object-meta keys as well as bridge secrets before handing the environment to Chrome.
+  const env = Object.fromEntries(
+    Object.entries(options.env ?? process.env).filter(
+      ([key]) =>
+        !key.startsWith("M365_GRAPH_") &&
+        key !== "__proto__" &&
+        key !== "constructor" &&
+        key !== "prototype",
+    ),
+  ) as NodeJS.ProcessEnv;
   let child: ChildProcess;
   try {
     child = spawnFn(options.browserPath, browserArgs(options.profileDir, options.url), {

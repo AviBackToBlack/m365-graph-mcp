@@ -1072,7 +1072,7 @@ describe("graph-batch reachability", () => {
     const l = await batch(`/chats/${ECID}/messages?$top=20`);
     expect(l.env.ok).toBe(true);
     expect(batchBody(l)?.value).toEqual(single);
-    expect(l.text).not.toMatch(/secret|alert\(1\)|<div>/);
+    expect(l.text).not.toMatch(/secret|alert\(1\)|<div>/i);
 
     for (const id of [ECID, CID]) {
       responses.push(ok(raw));
@@ -1081,7 +1081,7 @@ describe("graph-batch reachability", () => {
       expect(batchBody(g)).toEqual(
         projectChatMessage(raw, GET_BODY_MAX_CHARS) as Record<string, unknown>,
       );
-      expect(g.text).not.toMatch(/secret|alert\(1\)|<div>/);
+      expect(g.text).not.toMatch(/secret|alert\(1\)|<div>/i);
     }
 
     const pin = {
@@ -1093,7 +1093,7 @@ describe("graph-batch reachability", () => {
     responses.push(ok({ value: [pin] }));
     const p = await batch(`/chats/${ECID}/pinnedMessages?$expand=message`);
     expect(batchBody(p)?.value).toEqual([projectPinnedMessage(pin, true)]);
-    expect(p.text).not.toMatch(/secret|alert\(1\)|<div>/);
+    expect(p.text).not.toMatch(/secret|alert\(1\)|<div>/i);
     responses.push(ok({ value: [pin] }));
     const q = await batch(`/chats/${ECID}/pinnedMessages`);
     expect(batchBody(q)?.value).toEqual([
