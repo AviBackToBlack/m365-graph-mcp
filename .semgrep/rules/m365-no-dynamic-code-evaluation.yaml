@@ -1,0 +1,28 @@
+rules:
+  - id: m365-no-dynamic-code-evaluation
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Dynamic code evaluation or native/alternate code loading (eval, new Function, Function(), node:vm,
+      node:worker_threads, node:cluster, node:repl, process.dlopen). Microsoft 365 content and tool
+      input are untrusted data and must never be evaluated as code; code-level allowlists, not runtime
+      strings, define the capability surface (SECURITY_INVARIANTS "Prompt/tool injection containment" and
+      "Query and path handling", THREAT_MODEL T23).
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: globalThis.eval(...)
+      - pattern: process.dlopen(...)
+      - pattern: new Function(...)
+      - pattern: Function(...)
+      - pattern: globalThis.Function(...)
+      # node:vm imports (static, bare, re-export, require, dynamic); static forms anchored to the start
+      # of a line so prose in comments is not matched.
+      - pattern-regex: >-
+          (?m)^[ \t]*(import|export)\b[^;'"]*?\bfrom[ \t\r\n]*["'](node:)?(vm|worker_threads|cluster|repl)["']|(?m)^[ \t]*import[ \t]*["'](node:)?(vm|worker_threads|cluster|repl)["']
+      - pattern-regex: >-
+          \b(require|import)\([ \t\r\n]*["'](node:)?(vm|worker_threads|cluster|repl)["'][ \t\r\n]*\)
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "**/*.test.ts"

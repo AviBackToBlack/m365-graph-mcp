@@ -1,0 +1,49 @@
+rules:
+  - id: m365-authorization-only-in-graph-client
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      An Authorization header (any letter case; object key, Headers.set/append, property or index
+      assignment) or a `Bearer <value>` string is built outside src/graph/client.ts. The bearer is
+      attached in exactly one place, after assertFixedOrigin, so it can only reach the fixed
+      https://graph.microsoft.com origin (SECURITY_INVARIANTS "Network": never send the bearer token to
+      any other origin; THREAT_MODEL T24, T17). HTTP field names are case-insensitive, so every
+      spelling is matched.
+    pattern-either:
+      # Object literal key, quoted or not, any case.
+      - patterns:
+          - pattern: |
+              { ..., $K: $V, ... }
+          - metavariable-regex:
+              metavariable: $K
+              regex: (?i)^["'`]?authorization["'`]?$
+      # Headers.set / Headers.append with the name in any case.
+      - patterns:
+          - pattern-either:
+              - pattern: $H.set($K, ...)
+              - pattern: $H.append($K, ...)
+          - metavariable-regex:
+              metavariable: $K
+              regex: (?i)^["'`]authorization["'`]$
+      # Property assignment: headers.Authorization = v (any case).
+      - patterns:
+          - pattern: $H.$P = $V
+          - metavariable-regex:
+              metavariable: $P
+              regex: (?i)^authorization$
+      # Index assignment: headers["Authorization"] = v (any case).
+      - patterns:
+          - pattern: $H[$K] = $V
+          - metavariable-regex:
+              metavariable: $K
+              regex: (?i)^["'`]authorization["'`]$
+      - pattern: |
+          `Bearer ${$X}`
+      - pattern: |
+          "Bearer " + $X
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "/src/graph/client.ts"
+        - "**/*.test.ts"

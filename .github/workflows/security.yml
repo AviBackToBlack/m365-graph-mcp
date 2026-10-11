@@ -1,0 +1,264 @@
+name: Security
+
+# Dependency-vulnerability gates (SM-16 part B1; D51 item 6, D53), secret/history scanning
+# (part B2; D51 item 7) and repo-specific Semgrep rules (part B3; D51 item 5; not CodeQL).
+# Independent defense-in-depth coverage: these jobs are NOT equivalents of
+# GitHub Dependency Review / code scanning, which belong to the public product
+# repository. Nothing here uploads SARIF, so no `security-events: write`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly (Monday 05:17 UTC): surfaces new advisories against unchanged deps.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      # All dependencies (dev included): dev tooling runs in CI and on the
+      # developer machine, so high/critical advisories there matter too (D51).
+      - name: Audit (fails on high/critical)
+        run: npm audit --audit-level=high
+
+  osv-scanner:
+    name: OSV-Scanner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # ghcr.io/google/osv-scanner v2.6.0, pinned by multi-arch manifest-list digest.
+      # Exits non-zero on any finding. Console output only; no SARIF upload.
+      - name: Scan package-lock.json
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/src:ro" \
+            --workdir /src \
+            ghcr.io/google/osv-scanner@sha256:afd838850ac1a0fcc15ff4a041dc9ba11123c3f0d2666217a5f0fcf9222b55fa \
+            scan source --lockfile=package-lock.json
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Scan policy. On pull requests the policy comes from the BASE branch, not from the PR
+      # being scanned, so a PR that loosens .gitleaks.toml turns its own check red; a policy
+      # change takes effect only after review and merge. Bootstrap: if the base has no
+      # .gitleaks.toml yet, the PR's file is used with a visible warning. Residual (documented
+      # in THREAT_MODEL T25): a pull_request workflow is itself read from the PR, so a PR that
+      # edits this job can bypass it; changes to .github/ and .gitleaks.toml need review.
+      # .gitleaksignore is not used here: its presence fails the job, so it cannot be used
+      # to suppress findings outside the reviewed policy. Likewise, inline `gitleaks:allow`
+      # markers are ignored (--ignore-gitleaks-allow on the scan below).
+      - name: Select scan policy
+        run: |
+          set -euo pipefail
+          policy_dir="$RUNNER_TEMP/gitleaks-policy"
+          mkdir -p "$policy_dir"
+          policy="$policy_dir/gitleaks.toml"
+          if [ -n "$(find . -path ./.git -prune -o -name .gitleaksignore -print)" ]; then
+            echo "::error::.gitleaksignore is not allowed; add reviewed entries to .gitleaks.toml"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base="origin/$GITHUB_BASE_REF"
+            if git cat-file -e "$base:.gitleaks.toml" 2>/dev/null; then
+              git show "$base:.gitleaks.toml" > "$policy"
+              if ! git diff --quiet "$base" HEAD -- .gitleaks.toml; then
+                echo "::warning::This PR changes .gitleaks.toml; it is scanned with the base branch policy."
+              fi
+            elif [ -f .gitleaks.toml ]; then
+              echo "::warning::The base branch has no .gitleaks.toml; using this PR's policy (bootstrap)."
+              cp .gitleaks.toml "$policy"
+            fi
+          elif [ -f .gitleaks.toml ]; then
+            cp .gitleaks.toml "$policy"
+          fi
+          if [ ! -s "$policy" ]; then
+            printf '[extend]\nuseDefault = true\n' > "$policy"
+          fi
+      # ghcr.io/gitleaks/gitleaks v8.30.1, pinned by multi-arch manifest-list digest.
+      # Scans the whole git history (covers PR commits). Findings exit non-zero.
+      # --redact=100 hides all matched material (-v adds file/rule/commit for triage, still
+      # redacted); no report file, no artifact and no SARIF. The redacted console log is kept
+      # only in $RUNNER_TEMP for the checks below and is never uploaded. No network; both
+      # mounts are read-only; git's safe.directory is set via environment-injected config.
+      # Fail closed: gitleaks exits 0 with "no leaks found" when git itself fails
+      # ("not a git repository"), so any ERR line or a zero commit count also fails the job.
+      - name: Scan git history
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/gitleaks.log"
+          docker run --rm --network none \
+            --volume "$GITHUB_WORKSPACE:/repo:ro" \
+            --volume "$RUNNER_TEMP/gitleaks-policy:/policy:ro" \
+            --env GIT_CONFIG_COUNT=1 \
+            --env GIT_CONFIG_KEY_0=safe.directory \
+            --env GIT_CONFIG_VALUE_0=/repo \
+            ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git --no-banner --redact=100 --exit-code 1 -v --ignore-gitleaks-allow \
+            --config /policy/gitleaks.toml --gitleaks-ignore-path /policy \
+            /repo 2>&1 | tee "$log"
+          plain="$(sed 's/\x1b\[[0-9;]*m//g' "$log")"
+          if grep -q ' ERR ' <<<"$plain"; then
+            echo "::error::gitleaks reported an error; failing closed"
+            exit 1
+          fi
+          if ! grep -Eq '(^| )[1-9][0-9]* commits scanned' <<<"$plain"; then
+            echo "::error::gitleaks scanned no commits; failing closed"
+            exit 1
+          fi
+
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Rule selection mirrors the gitleaks policy step: on pull requests the rules come from
+      # the BASE branch, so a PR cannot weaken the rules it is checked against (bootstrap:
+      # if the base has no rules yet, the PR's rules are used with a warning). Residual
+      # (THREAT_MODEL T25): a pull_request workflow is itself read from the PR. A
+      # .semgrepignore fails the job; findings cannot be hidden from the reviewed rules.
+      - name: Select rules
+        run: |
+          set -euo pipefail
+          rules_dir="$RUNNER_TEMP/semgrep-rules"
+          mkdir -p "$rules_dir"
+          if [ -n "$(find . -path ./.git -prune -o -name .semgrepignore -print)" ]; then
+            echo "::error::.semgrepignore is not allowed; narrow the rule's paths in .semgrep/rules instead"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base="origin/$GITHUB_BASE_REF"
+            if git cat-file -e "$base:.semgrep/rules" 2>/dev/null; then
+              git archive "$base" .semgrep/rules | tar -x -C "$rules_dir" --strip-components=2
+              if ! git diff --quiet "$base" HEAD -- .semgrep/rules; then
+                echo "::warning::This PR changes .semgrep/rules; it is scanned with the base branch rules."
+                # The PR's own rules are still validated (blocking rule tests) and run as an
+                # informational scan, so a broken or newly violated rule cannot merge green.
+                mkdir -p "$RUNNER_TEMP/semgrep-rules-pr"
+                if [ -d .semgrep/rules ]; then
+                  cp -R .semgrep/rules/. "$RUNNER_TEMP/semgrep-rules-pr/"
+                fi
+              fi
+            else
+              echo "::warning::The base branch has no .semgrep/rules; using this PR's rules (bootstrap)."
+              cp -R .semgrep/rules/. "$rules_dir/"
+            fi
+          else
+            cp -R .semgrep/rules/. "$rules_dir/"
+          fi
+          if [ -z "$(find "$rules_dir" -maxdepth 1 -name '*.yaml' -print -quit)" ]; then
+            echo "::error::no Semgrep rules found; failing closed"
+            exit 1
+          fi
+      # semgrep/semgrep 1.180.0, pinned by multi-arch index digest. Offline: local rules only,
+      # no registry configs, no network, metrics and version check off. --disable-nosem and
+      # --x-ignore-semgrepignore-files stop inline/file suppression; --error fails on findings.
+      # Fail closed: the rule tests must report N/N passed with N > 0, and the scan must report
+      # a non-zero rule and file count (a scan that matches no targets otherwise exits 0).
+      # On a PR that changes the rules, the PR's rule set is tested too (blocking): an empty
+      # PR rule set, invalid YAML or a wrong ruleid/ok fixture fails here before merge.
+      - name: Test rules
+        run: |
+          set -euo pipefail
+          for set in semgrep-rules semgrep-rules-pr; do
+            dir="$RUNNER_TEMP/$set"
+            [ -d "$dir" ] || continue
+            log="$RUNNER_TEMP/$set-test.log"
+            echo "Testing $set"
+            # Every rule must ship its annotated fixture: `semgrep --test` reports N/N only over
+            # fixtures that exist, so an untested rule would otherwise pass silently.
+            for rule in "$dir"/*.yaml; do
+              [ -e "$rule" ] || continue
+              if [ ! -f "${rule%.yaml}.ts" ]; then
+                echo "::error::$(basename "$rule") ($set) has no $(basename "${rule%.yaml}").ts fixture; failing closed"
+                exit 1
+              fi
+            done
+            docker run --rm --network none \
+              --volume "$dir:/rules:ro" \
+              semgrep/semgrep@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3 \
+              semgrep --test --metrics=off --disable-version-check /rules 2>&1 | tee "$log"
+            plain="$(sed 's/\x1b\[[0-9;]*m//g' "$log")"
+            if ! grep -Eq '([1-9][0-9]*)/\1: .*All tests passed' <<<"$plain"; then
+              echo "::error::Semgrep rule tests ($set) did not all pass; failing closed"
+              exit 1
+            fi
+          done
+      - name: Scan
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/semgrep-scan.log"
+          docker run --rm --network none \
+            --volume "$GITHUB_WORKSPACE:/src:ro" \
+            --volume "$RUNNER_TEMP/semgrep-rules:/rules:ro" \
+            --workdir /src \
+            semgrep/semgrep@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3 \
+            semgrep scan --config /rules --metrics=off --disable-version-check --error --strict \
+            --disable-nosem --no-git-ignore --max-target-bytes 0 --oss-only \
+            --x-ignore-semgrepignore-files . 2>&1 | tee "$log"
+          plain="$(sed 's/\x1b\[[0-9;]*m//g' "$log")"
+          if ! grep -Eq 'Ran [1-9][0-9]* rules? on [1-9][0-9]* files?' <<<"$plain"; then
+            echo "::error::Semgrep scanned no rules or no files; failing closed"
+            exit 1
+          fi
+      # Informational only: the base rules above are authoritative. Findings from the PR's
+      # changed rules are surfaced as a warning so main does not turn red after merge unseen.
+      - name: Scan with the PR's rules (informational)
+        if: github.event_name == 'pull_request'
+        run: |
+          # The runner invokes `bash -e`; capture the exit status explicitly so a non-zero scan
+          # reaches the warning below instead of aborting the step.
+          set -uo pipefail
+          dir="$RUNNER_TEMP/semgrep-rules-pr"
+          if [ ! -d "$dir" ]; then
+            echo "The PR does not change .semgrep/rules."
+            exit 0
+          fi
+          rc=0
+          docker run --rm --network none \
+            --volume "$GITHUB_WORKSPACE:/src:ro" \
+            --volume "$dir:/rules:ro" \
+            --workdir /src \
+            semgrep/semgrep@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3 \
+            semgrep scan --config /rules --metrics=off --disable-version-check --error --strict \
+            --disable-nosem --no-git-ignore --max-target-bytes 0 --oss-only \
+            --x-ignore-semgrepignore-files . || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::The PR's changed Semgrep rules report findings or errors (exit $rc); main will fail after merge unless fixed."
+          fi
+          exit 0

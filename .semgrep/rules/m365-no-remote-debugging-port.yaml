@@ -1,0 +1,19 @@
+rules:
+  - id: m365-no-remote-debugging-port
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      A Chrome remote-debugging TCP/WebSocket flag is used. The bridge drives the browser only over
+      --remote-debugging-pipe (CDP on inherited fds 3/4); a debugging port would expose browser control to
+      every same-user process (D42, THREAT_MODEL T20, SECURITY_INVARIANTS "Authentication material").
+    patterns:
+      - pattern-either:
+          - pattern: "..."
+          - pattern: |
+              `...`
+      - pattern-regex: -{1,2}remote-debugging-(port|address)
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "**/*.test.ts"

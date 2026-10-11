@@ -1,0 +1,36 @@
+version: 2
+
+# Version-update PRs only; Dependabot never merges. Review and merge are manual.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    # D54 (temporary): typescript-eslint 8.71.x requires typescript <6.1.0, so TypeScript 7 cannot
+    # install (ERESOLVE). Minor/patch updates stay eligible. Remove when typescript-eslint officially
+    # supports TypeScript 7, then upgrade the toolchain major versions as one coherent change.
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"

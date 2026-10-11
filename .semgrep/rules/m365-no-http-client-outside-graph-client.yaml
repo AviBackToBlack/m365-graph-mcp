@@ -1,0 +1,66 @@
+rules:
+  - id: m365-no-http-client-outside-graph-client
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Outbound network client outside src/graph/client.ts. The only network egress is the fixed
+      https://graph.microsoft.com origin through GraphClient (assertFixedOrigin, redirect: "manual"); no
+      other code may call fetch, open WebSocket/EventSource/XMLHttpRequest, import node:http, https,
+      http2, dgram, tls, dns, inspector or a common third-party HTTP client (SECURITY_INVARIANTS
+      "Network", THREAT_MODEL T24, T5).
+    pattern-either:
+      - pattern: fetch(...)
+      - pattern: globalThis.fetch(...)
+      - pattern: new WebSocket(...)
+      - pattern: new EventSource(...)
+      - pattern: new XMLHttpRequest(...)
+      - patterns:
+          - pattern: new globalThis.$C(...)
+          - metavariable-regex:
+              metavariable: $C
+              regex: ^(WebSocket|EventSource|XMLHttpRequest)$
+      - pattern: globalThis.fetch
+      - pattern: globalThis["fetch"]
+      - pattern: const { ..., fetch, ... } = globalThis;
+      - pattern: |
+          const { ..., fetch: $F, ... } = globalThis;
+      # The global fetch taken as a value (aliasing or passing it on), not only called directly.
+      # A scope that declares its own local `fetch` (a test double) is not the global.
+      - patterns:
+          - pattern-either:
+              - pattern: const $A = fetch;
+              - pattern: let $A = fetch;
+              - pattern: $A = fetch
+              - pattern: $F(..., fetch, ...)
+              - pattern: |
+                  { ..., $K: fetch, ... }
+              - pattern: return fetch;
+              - pattern: (...) => fetch
+              - pattern: |
+                  [..., fetch, ...]
+          - pattern-not-inside: |
+              const fetch: $T = $E;
+              ...
+          - pattern-not-inside: |
+              const fetch = $E;
+              ...
+          - pattern-not-inside: |
+              let fetch: $T = $E;
+              ...
+          - pattern-not-inside: |
+              let fetch = $E;
+              ...
+          - pattern-not-inside: |
+              function $FN(..., fetch, ...) { ... }
+      # Module imports (static, bare, re-export, require, dynamic). Static forms are anchored to the
+      # start of a line so prose in comments is not matched.
+      - pattern-regex: >-
+          (?m)^[ \t]*(import|export)\b[^;'"]*?\bfrom[ \t\r\n]*["'](node:)?(http|https|http2|dgram|tls|dns|dns/promises|inspector|inspector/promises|undici|node-fetch|cross-fetch|axios|got|ky|ws|needle|superagent|request)["']|(?m)^[ \t]*import[ \t]*["'](node:)?(http|https|http2|dgram|tls|dns|dns/promises|inspector|inspector/promises|undici|node-fetch|cross-fetch|axios|got|ky|ws|needle|superagent|request)["']
+      - pattern-regex: >-
+          \b(require|import)\([ \t\r\n]*["'](node:)?(http|https|http2|dgram|tls|dns|dns/promises|inspector|inspector/promises|undici|node-fetch|cross-fetch|axios|got|ky|ws|needle|superagent|request)["'][ \t\r\n]*\)
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "/src/graph/client.ts"
+        - "**/*.test.ts"

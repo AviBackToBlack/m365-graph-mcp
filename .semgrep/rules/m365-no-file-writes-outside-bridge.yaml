@@ -1,0 +1,49 @@
+rules:
+  - id: m365-no-file-writes-outside-bridge
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      A filesystem-mutating API (write/append/copy/create-stream, mkdir/mkdtemp, rm/rmdir/unlink,
+      rename, truncate, link/symlink, chmod/chown/utimes, fd-based write/open, and their Sync and
+      promise forms) is used outside the bridge's runtime-directory management. No tool reads or writes
+      files and Microsoft 365 content is never persisted; the only permitted filesystem mutation is the
+      bridge creating its 0700 runtime/profile directories and removing a stale broker socket
+      (src/bridge/broker.ts, src/bridge/browser.ts). Captured bearer material is never written to disk
+      (SECURITY_INVARIANTS "Process/filesystem" and "Authentication material"; THREAT_MODEL T12, T23).
+    pattern-either:
+      # Names that only mean a filesystem mutation: matched as bare calls (including aliased named
+      # imports, which Semgrep resolves) and on any receiver (fs., fs.promises., fsp., ...).
+      - patterns:
+          - pattern-either:
+              - pattern: $F(...)
+              - pattern: $OBJ.$F(...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(writeFile|appendFile|createWriteStream|copyFile|cpSync|mkdir|mkdtemp|rm|rmdir|unlink|rename|f?truncate|symlink|linkSync|[fl]?chmod|[fl]?chown|[fl]?utimes|writev|writeSync|writevSync)(Sync)?$
+      # Generic names (write, open, cp, link) count only on an fs-like receiver.
+      - patterns:
+          - pattern: $OBJ.$F(...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(write|open|openSync|cp|link)$
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: ^(fs|fsp|pfs|nodeFs|fsPromises|promises|[A-Za-z_$][A-Za-z0-9_$]*\.promises)$
+      # Importing any mutating name from an fs module.
+      - patterns:
+          - pattern-either:
+              - pattern: import { $F } from "node:fs"
+              - pattern: import { $F } from "fs"
+              - pattern: import { $F } from "node:fs/promises"
+              - pattern: import { $F } from "fs/promises"
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(writeFile|appendFile|createWriteStream|copyFile|cp|cpSync|mkdir|mkdtemp|rm|rmdir|unlink|rename|f?truncate|link|symlink|[fl]?chmod|[fl]?chown|[fl]?utimes|write|writev|open)(Sync)?$
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        # Runtime/profile directory creation (0700) and stale broker-socket removal only.
+        - "/src/bridge/broker.ts"
+        - "/src/bridge/browser.ts"
+        - "**/*.test.ts"

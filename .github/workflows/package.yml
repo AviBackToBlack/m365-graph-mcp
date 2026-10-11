@@ -1,0 +1,250 @@
+name: Package
+
+# SM-16 part B4 (D51 items 8, 9, 11; D53) and D56: a CycloneDX SBOM and SHA-256 hashes for the
+# minimal, allowlisted npm package artifact, whose exact contents, import graph and clean install
+# are verified here. SHA-256 hashes are integrity checksums, NOT provenance: GitHub artifact
+# attestations are the native provenance layer and belong to the public product repository (D53).
+# Nothing is published to a registry; the artifacts are kept as a CI workflow artifact only.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: SBOM and hashes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Exact toolchain, not a floating major: the tarball bytes depend on the npm version, so the
+      # same commit must always be packed by the same Node/npm. Bump both together, deliberately.
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.23.3"
+          cache: npm
+      - name: Toolchain
+        run: |
+          set -euo pipefail
+          expected_npm="10.9.9"
+          if [ "$(npm -v)" != "$expected_npm" ]; then
+            echo "::error::npm $(npm -v) is not the pinned $expected_npm bundled with Node 22.23.3"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/package"
+          printf 'node %s\nnpm %s\n' "$(node -v)" "$(npm -v)" | tee "$RUNNER_TEMP/package/TOOLCHAIN"
+      - name: Install dependencies
+        run: npm ci
+      # The release build (tsconfig.release.json) emits only what both bin entry points import; the
+      # `prepack` script runs the same build again inside every `npm pack`, so a pack can never
+      # ship a stale development build. This explicit step makes a build failure obvious early.
+      - name: Build (release)
+        run: npm run build:release
+      # npm pack is run twice into separate directories; the tarballs must be byte-identical
+      # (npm normalizes entry order and timestamps). With the pinned toolchain above, the hash is
+      # reproducible from the same commit; cross-run equality is by construction (same commit,
+      # same Node/npm, same lockfile), and is re-checked when a release is verified on a clean
+      # machine (D52 R7). Exactly one tarball is expected in each directory.
+      - name: Pack (reproducible)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/package"
+          again="$RUNNER_TEMP/package-again"
+          mkdir -p "$out" "$again"
+          npm pack --pack-destination "$out"
+          npm pack --pack-destination "$again"
+          for dir in "$out" "$again"; do
+            count="$(find "$dir" -maxdepth 1 -name '*.tgz' | wc -l)"
+            if [ "$count" -ne 1 ]; then
+              echo "::error::expected exactly one package tarball in $dir, found $count"
+              exit 1
+            fi
+          done
+          tgz="$(find "$out" -maxdepth 1 -name '*.tgz' -print -quit)"
+          if [ "$(basename "$(find "$again" -maxdepth 1 -name '*.tgz' -print -quit)")" != "$(basename "$tgz")" ]; then
+            echo "::error::the two packs produced differently named tarballs"
+            exit 1
+          fi
+          first="$(sha256sum "$tgz" | cut -d' ' -f1)"
+          second="$(sha256sum "$again/$(basename "$tgz")" | cut -d' ' -f1)"
+          if [ "$first" != "$second" ]; then
+            echo "::error::npm pack is not reproducible ($first != $second)"
+            exit 1
+          fi
+          echo "Reproducible package: $(basename "$tgz") sha256 $first"
+      # D56: the tarball is verified as an artifact, never trusted from the build tree. (a) its file
+      # list must equal package-manifest.txt exactly (extra and missing files both fail); (b) no
+      # packed .js may reference a source map (none is packed); (c) the JavaScript must be exactly
+      # the set reachable from the two bin entry points through relative static imports, re-exports
+      # and literal dynamic import(), with no import pointing at a file that is not packed; (d) both
+      # bin entry points keep their shebang.
+      - name: Verify tarball contents (D56)
+        run: |
+          set -euo pipefail
+          tgz="$(find "$RUNNER_TEMP/package" -maxdepth 1 -name '*.tgz' -print -quit)"
+          extract="$RUNNER_TEMP/extract"
+          mkdir -p "$extract"
+          tar -tzf "$tgz" | sed 's#^package/##' | LC_ALL=C sort > "$RUNNER_TEMP/tarball-files.txt"
+          if ! diff -u package-manifest.txt "$RUNNER_TEMP/tarball-files.txt"; then
+            echo "::error::tarball contents differ from package-manifest.txt (extra '+' or missing '-' files above)"
+            exit 1
+          fi
+          tar -xzf "$tgz" -C "$extract"
+          if grep -rl 'sourceMappingURL' "$extract/package/dist"; then
+            echo "::error::a packed JavaScript file references a source map, which is not packed"
+            exit 1
+          fi
+          for bin in dist/index.js dist/bridge/main.js; do
+            if [ "$(head -n 1 "$extract/package/$bin")" != '#!/usr/bin/env node' ]; then
+              echo "::error::$bin lost its #!/usr/bin/env node shebang"
+              exit 1
+            fi
+          done
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const root = path.join(process.argv[process.argv.length - 1], "dist");
+            const fail = (m) => { console.error(`::error::import graph: ${m}`); process.exit(1); };
+            const walk = (d) => fs.readdirSync(d, { withFileTypes: true })
+              .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+            const packed = new Set(walk(root).filter((f) => f.endsWith(".js")));
+            const edge = /(?:\bfrom|\bimport)\s*\(?\s*["\x27](\.{1,2}\/[^"\x27]+)["\x27]/g;
+            const seen = new Set();
+            const queue = [path.join(root, "index.js"), path.join(root, "bridge", "main.js")];
+            while (queue.length > 0) {
+              const file = queue.pop();
+              if (seen.has(file)) continue;
+              if (!packed.has(file)) fail(`${path.relative(root, file)} is imported but not packed`);
+              seen.add(file);
+              for (const m of fs.readFileSync(file, "utf8").matchAll(edge)) {
+                queue.push(path.resolve(path.dirname(file), m[1]));
+              }
+            }
+            const unreachable = [...packed].filter((f) => !seen.has(f));
+            if (unreachable.length > 0) {
+              fail(`packed but unreachable from either entry point: ${unreachable.map((f) => path.relative(root, f)).join(", ")}`);
+            }
+            console.log(`import graph: ${seen.size} modules reachable, none unreachable, none missing`);
+          ' "$extract/package"
+      # D56 install smoke: the tarball is installed into a clean directory outside the repository
+      # (dependencies resolved from the registry, lifecycle scripts off) and both executables are
+      # run from node_modules/.bin with a minimal environment and no token. The MCP server must
+      # answer initialize + tools/list over stdio with the pinned tool count (this exercises
+      # DEFAULT_CATALOG_PATH and SDK/zod resolution after installation). The bridge is started with
+      # no configuration: it must refuse with its fixed configuration error (exit 2) before it
+      # creates any directory, socket or browser process.
+      - name: Install smoke (both bins)
+        run: |
+          set -euo pipefail
+          tgz="$(find "$RUNNER_TEMP/package" -maxdepth 1 -name '*.tgz' -print -quit)"
+          smoke="$RUNNER_TEMP/smoke"
+          mkdir -p "$smoke"
+          cd "$smoke"
+          npm init -y > /dev/null
+          npm install --ignore-scripts --no-audit --no-fund "$tgz"
+          node -e '
+            const { spawn } = require("node:child_process");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const fail = (m) => { console.error(`::error::MCP smoke: ${m}`); process.exit(1); };
+            const bin = path.resolve("node_modules", ".bin", "m365-graph-mcp");
+            const expected = JSON.parse(
+              fs.readFileSync("node_modules/m365-graph-mcp/endpoints.json", "utf8"),
+            ).length;
+            // Same pin as PINNED_TOOL_COUNT in src/tool-surface.test.ts.
+            if (expected !== 76) fail(`packaged endpoints.json lists ${expected} endpoints, not 76`);
+            const child = spawn(bin, [], { env: { PATH: process.env.PATH }, stdio: ["pipe", "pipe", "pipe"] });
+            const timer = setTimeout(() => { child.kill(); fail("no tools/list answer within 30s"); }, 30000);
+            let out = "";
+            let err = "";
+            let done = false;
+            child.stderr.on("data", (d) => { err += d; });
+            child.on("error", (e) => fail(`cannot start: ${e.message}`));
+            child.on("exit", (code) => { if (code !== null && !done) fail(`exited early (${code}): ${err.trim()}`); });
+            const send = (m) => child.stdin.write(JSON.stringify(m) + "\n");
+            child.stdout.on("data", (d) => {
+              out += d;
+              let i;
+              while ((i = out.indexOf("\n")) >= 0) {
+                const line = out.slice(0, i);
+                out = out.slice(i + 1);
+                if (!line.trim()) continue;
+                const msg = JSON.parse(line);
+                if (msg.id === 1) {
+                  send({ jsonrpc: "2.0", method: "notifications/initialized" });
+                  send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+                } else if (msg.id === 2) {
+                  done = true;
+                  clearTimeout(timer);
+                  const n = msg.result?.tools?.length;
+                  child.kill();
+                  if (n !== 76) fail(`tools/list returned ${n} tools, expected 76`);
+                  console.log(`MCP smoke: initialize + tools/list OK, ${n} tools`);
+                }
+              }
+            });
+            send({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "package-smoke", version: "0" } },
+            });
+          '
+          code=0
+          stderr="$(env -i PATH="$PATH" node_modules/.bin/m365-graph-bridge 2>&1 >/dev/null)" || code=$?
+          expected='m365-graph-bridge: failed: M365_GRAPH_TENANT_ID is required and must be a tenant GUID.'
+          if [ "$code" -ne 2 ] || [ "$stderr" != "$expected" ]; then
+            echo "::error::bridge fail-closed smoke: exit $code, stderr '$stderr'"
+            exit 1
+          fi
+          echo "bridge smoke: exit 2 with the fixed configuration error"
+      # CycloneDX SBOM of the dependency tree (D51 item 8: npm sbom --sbom-format cyclonedx; dev
+      # dependencies are included and flagged by npm as development). Fail closed unless it parses
+      # as CycloneDX, its root purl is this package and version (npm derives the display name from
+      # the directory, so the purl is checked), and every direct runtime dependency is listed at its
+      # exact pinned version.
+      - name: SBOM (CycloneDX)
+        run: |
+          set -euo pipefail
+          sbom="$RUNNER_TEMP/package/m365-graph-mcp.cdx.json"
+          npm sbom --sbom-format cyclonedx --sbom-type application > "$sbom"
+          node -e '
+            const fs = require("node:fs");
+            const bom = JSON.parse(fs.readFileSync(process.argv[process.argv.length - 1], "utf8"));
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const fail = (m) => { console.error(`::error::invalid SBOM: ${m}`); process.exit(1); };
+            if (bom.bomFormat !== "CycloneDX") fail("bomFormat is not CycloneDX");
+            if (typeof bom.specVersion !== "string") fail("missing specVersion");
+            const purl = `pkg:npm/${pkg.name}@${pkg.version}`;
+            if (bom.metadata?.component?.purl !== purl) fail(`root purl is not ${purl}`);
+            if (!Array.isArray(bom.components) || bom.components.length === 0) fail("no components");
+            for (const [name, version] of Object.entries(pkg.dependencies ?? {})) {
+              const hit = bom.components.some((c) => c.name === name && c.version === version);
+              if (!hit) fail(`runtime dependency ${name}@${version} missing`);
+            }
+            console.log(`CycloneDX ${bom.specVersion}: ${bom.components.length} components`);
+          ' "$sbom"
+      # SHA-256 over the package tarball and the SBOM, then verified from the file itself.
+      - name: SHA-256 hashes
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/package"
+          sha256sum -- *.tgz m365-graph-mcp.cdx.json TOOLCHAIN > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+      - name: Upload package, SBOM and hashes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-sbom-sha256
+          path: ${{ runner.temp }}/package/
+          if-no-files-found: error
+          retention-days: 30

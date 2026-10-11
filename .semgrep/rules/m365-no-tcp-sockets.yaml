@@ -1,0 +1,40 @@
+rules:
+  - id: m365-no-tcp-sockets
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Non-path socket use in a file allowed to import node:net. The token broker is a Unix-domain-socket
+      channel only: it never listens on TCP, never binds 127.0.0.1, ::1, 0.0.0.0 or any routable
+      interface, and the client connects by `path` only (D43, THREAT_MODEL T10, SECURITY_INVARIANTS
+      "Authentication material"). Any connect/createConnection (namespaced, destructured or on a Socket
+      instance) whose first argument is not a `{ path }` object, and any listen whose first argument is
+      not a `{ path }` object or a path/socket-named identifier, is flagged.
+    # Scoped to the only files that may import node:net (m365-net-only-in-ipc-files forbids it
+    # elsewhere), so generic `.connect()` / `.listen()` calls in unrelated code are not matched.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $X.createConnection(...)
+              - pattern: $X.connect(...)
+              - pattern: createConnection(...)
+              - pattern: connect(...)
+          - pattern-not: '$X.createConnection({..., path: $P, ...}, ...)'
+          - pattern-not: '$X.connect({..., path: $P, ...}, ...)'
+          - pattern-not: 'createConnection({..., path: $P, ...}, ...)'
+          - pattern-not: 'connect({..., path: $P, ...}, ...)'
+      # listen() with no arguments binds an ephemeral TCP port.
+      - pattern: $SRV.listen()
+      - patterns:
+          - pattern: $SRV.listen($A, ...)
+          - pattern-not: '$SRV.listen({..., path: $P, ...}, ...)'
+          # Allowed only when the first argument reads as a socket path (identifier, member chain or
+          # literal naming a path/socket/pipe/ipc/endpoint); a numeric, host or port argument fails.
+          - metavariable-regex:
+              metavariable: $A
+              regex: (?is)^(?!.*(path|sock|pipe|ipc|endpoint)).*$
+    paths:
+      include:
+        - "/src/bridge/broker.ts"
+        - "/src/auth/bridge-token-provider.ts"
+      exclude:
+        - "**/*.test.ts"

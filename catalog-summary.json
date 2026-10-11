@@ -1,0 +1,34 @@
+{
+  "tool_count": 76,
+  "methods": {
+    "POST": 5,
+    "GET": 71
+  },
+  "post_tools": [
+    {
+      "toolName": "graph-batch",
+      "pathPattern": "/$batch",
+      "readOnly": null
+    },
+    {
+      "toolName": "get-schedule",
+      "pathPattern": "/me/calendar/getSchedule",
+      "readOnly": true
+    },
+    {
+      "toolName": "find-meeting-times",
+      "pathPattern": "/me/findMeetingTimes",
+      "readOnly": true
+    },
+    {
+      "toolName": "search-query",
+      "pathPattern": "/search/query",
+      "readOnly": true
+    },
+    {
+      "toolName": "copilot-retrieve",
+      "pathPattern": "/copilot/retrieval",
+      "readOnly": true
+    }
+  ]
+}

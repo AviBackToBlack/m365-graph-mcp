@@ -1,0 +1,52 @@
+rules:
+  - id: m365-no-token-in-output
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      An output sink (console.*, process.stderr/stdout.write, or a log-style helper such as the bridge's
+      log()/logger.*) receives a value naming a token, bearer, authorization or secret: an identifier
+      or member chain with such a name, an index with such a string key, or a Headers.get() of the
+      Authorization header. Access tokens, Authorization headers and secrets must never be logged or
+      written to stdout/stderr; diagnostics carry fixed categories only (THREAT_MODEL T17;
+      SECURITY_INVARIANTS "Authentication material": never log access tokens, and stdout is the MCP
+      protocol channel). String literals that merely contain the word are not flagged.
+    patterns:
+      # Sinks. Generic stream `.write()` (e.g. the broker's socket reply) is deliberately not a sink.
+      - pattern-either:
+          - pattern: console.$M(..., $ARG, ...)
+          - pattern: process.stderr.write(..., $ARG, ...)
+          - pattern: process.stdout.write(..., $ARG, ...)
+          - patterns:
+              - pattern: $LOG(..., $ARG, ...)
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: ^(log|logger|debug|info|warn|error|trace|emit|write)$
+          - patterns:
+              - pattern: $O.$LOG(..., $ARG, ...)
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: ^(log|debug|info|warn|error|trace)$
+      # Token-bearing content anywhere inside the argument.
+      - metavariable-pattern:
+          metavariable: $ARG
+          pattern-either:
+            - patterns:
+                - pattern: $ID
+                - metavariable-regex:
+                    metavariable: $ID
+                    regex: (?i)^(?=.*(token|bearer|authorization|secret))[A-Za-z_$][A-Za-z0-9_$]*([?]?[.][A-Za-z_$][A-Za-z0-9_$]*)*$
+            - patterns:
+                - pattern: $X[$K]
+                - metavariable-regex:
+                    metavariable: $K
+                    regex: (?i)^["'`][^"'`]*(token|bearer|authorization|secret)[^"'`]*["'`]$
+            - patterns:
+                - pattern: $H.get($K)
+                - metavariable-regex:
+                    metavariable: $K
+                    regex: (?i)^["'`][^"'`]*(token|bearer|authorization|secret)[^"'`]*["'`]$
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "**/*.test.ts"

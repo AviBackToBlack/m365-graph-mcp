@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+endpoints.json
+TOOL_SURFACE.md
+package-lock.json

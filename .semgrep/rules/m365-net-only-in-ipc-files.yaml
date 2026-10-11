@@ -1,0 +1,21 @@
+rules:
+  - id: m365-net-only-in-ipc-files
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      node:net is imported outside the two local-IPC files (src/bridge/broker.ts, the broker server, and
+      src/auth/bridge-token-provider.ts, its only client). Raw sockets belong only to the user-restricted
+      Unix-domain-socket broker channel (D43, THREAT_MODEL T10, SECURITY_INVARIANTS "Authentication
+      material").
+    pattern-either:
+      - pattern-regex: >-
+          (?m)^[ \t]*(import|export)\b[^;'"]*?\bfrom[ \t\r\n]*["'](node:)?net["']|(?m)^[ \t]*import[ \t]*["'](node:)?net["']
+      - pattern-regex: >-
+          \b(require|import)\([ \t\r\n]*["'](node:)?net["'][ \t\r\n]*\)
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "/src/bridge/broker.ts"
+        - "/src/auth/bridge-token-provider.ts"
+        - "**/*.test.ts"

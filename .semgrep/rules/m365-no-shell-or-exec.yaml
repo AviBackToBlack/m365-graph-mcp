@@ -1,0 +1,63 @@
+rules:
+  - id: m365-no-shell-or-exec
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Shell-based or synchronous process execution (exec, execSync, execFile, execFileSync, spawnSync,
+      fork) or a spawn option `shell` other than a literal `false`. This server has no shell execution;
+      the only spawn is the bridge browser with shell: false (THREAT_MODEL T23, SECURITY_INVARIANTS
+      "Process/filesystem": MCP has no shell-execution tool and Graph content cannot select executables).
+    pattern-either:
+      # Import-aware: any namespace/default/require alias of child_process, whatever its name.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import * as $NS from "$M";
+                  ...
+              - pattern-inside: |
+                  import $NS from "$M";
+                  ...
+              - pattern-inside: |
+                  const $NS = require("$M");
+                  ...
+              - pattern-inside: |
+                  let $NS = require("$M");
+                  ...
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(node:)?child_process$
+          - pattern: $NS.$F(...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(exec|execSync|execFile|execFileSync|spawnSync|fork)$
+      - pattern: exec(...)
+      - pattern: execSync(...)
+      - pattern: execFile(...)
+      - pattern: execFileSync(...)
+      - pattern: spawnSync(...)
+      - pattern: fork(...)
+      - patterns:
+          - pattern: $NS.$F(...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(exec|execSync|execFile|execFileSync|spawnSync|fork)$
+          - metavariable-regex:
+              metavariable: $NS
+              regex: ^(child_process|childProcess|cp|proc)$
+      - patterns:
+          - pattern-either:
+              - pattern: import { $F } from "node:child_process"
+              - pattern: import { $F } from "child_process"
+          - metavariable-regex:
+              metavariable: $F
+              regex: ^(exec|execSync|execFile|execFileSync|spawnSync|fork)$
+      - patterns:
+          - pattern: |
+              { ..., shell: $V, ... }
+          - pattern-not: |
+              { ..., shell: false, ... }
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "**/*.test.ts"

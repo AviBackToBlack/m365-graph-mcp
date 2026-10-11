@@ -1,0 +1,28 @@
+rules:
+  - id: m365-no-child-process-outside-browser
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      child_process is imported outside src/bridge/browser.ts. The only process this server may start
+      is the bridge-owned browser, with shell: false and fixed arguments; Graph content must never select
+      executables or arguments (THREAT_MODEL T23, SECURITY_INVARIANTS "Process/filesystem").
+    patterns:
+      - pattern-either:
+          - pattern: import $X from "node:child_process"
+          - pattern: import $X from "child_process"
+          - pattern: import * as $X from "node:child_process"
+          - pattern: import * as $X from "child_process"
+          - pattern: import { ... } from "node:child_process"
+          - pattern: import { ... } from "child_process"
+          - pattern: import "node:child_process"
+          - pattern: import "child_process"
+          - pattern: require("node:child_process")
+          - pattern: require("child_process")
+          - pattern: import("node:child_process")
+          - pattern: import("child_process")
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "/src/bridge/browser.ts"
+        - "**/*.test.ts"

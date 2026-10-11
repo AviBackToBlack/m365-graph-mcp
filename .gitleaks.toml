@@ -1,0 +1,19 @@
+# gitleaks configuration (SM-16 part B2; D51 item 7). The default ruleset applies; no rule is
+# disabled. Allowlists must be synthetic fixtures only, as narrow as possible, each with a reason.
+#
+# Content-based (not commit-fingerprint) allowlisting on purpose: a .gitleaksignore fingerprint
+# embeds the commit SHA, and D53 exports a sanitized tree as a fresh single-commit repository. The
+# entry below is only needed for this repository's history (the line's current form does not match
+# the rule; its introducing commit ee421bd did); keyed on content, it stays valid after the export.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """Synthetic test fixture, not a credential: a generic JWT header ({"typ":"JWT","alg":"RS256"}) \
+plus the literal marker .SECRETKEYMATERIAL, used as an unknown input key name in the negative test \
+"never echoes an unknown key name, even a JWT" (src/server.test.ts). Matched by generic-api-key."""
+condition = "AND"
+regexTarget = "line"
+paths = ['''^src/server\.test\.ts$''']
+regexes = ['''eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9\.SECRETKEYMATERIAL''']

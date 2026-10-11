@@ -1,0 +1,32 @@
+rules:
+  - id: m365-no-module-loader-escape
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      A module-loader escape hatch (require, createRequire, node:module, process.getBuiltinModule,
+      process.binding, or a dynamic import() with a computed specifier). These load modules without a
+      static `import` declaration, so they bypass every import-scoped rule here (child_process, node:net,
+      HTTP clients, node:vm, fs mutation). This is an ESM codebase with static imports only; obtain
+      modules through reviewable static imports (THREAT_MODEL T10, T23, T24; D43; SECURITY_INVARIANTS
+      "Network" and "Process/filesystem").
+    pattern-either:
+      - pattern: require(...)
+      - pattern: createRequire(...)
+      - pattern: $M.createRequire(...)
+      - pattern: process.getBuiltinModule(...)
+      - pattern: process.binding(...)
+      - pattern: process._linkedBinding(...)
+      - pattern: getBuiltinModule(...)
+      # Dynamic import() whose specifier is not a plain string literal.
+      - patterns:
+          - pattern: import($SPEC)
+          - pattern-not: import("...")
+      # node:module itself (createRequire, Module._load, ...), static, bare or re-exported; anchored to
+      # the start of a line so prose in comments is not matched.
+      - pattern-regex: >-
+          (?m)^[ \t]*(import|export)\b[^;'"]*?\bfrom[ \t\r\n]*["'](node:)?module["']|(?m)^[ \t]*import[ \t]*["'](node:)?module["']
+    paths:
+      include:
+        - "/src/**"
+      exclude:
+        - "**/*.test.ts"
