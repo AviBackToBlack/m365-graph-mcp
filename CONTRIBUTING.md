@@ -12,6 +12,12 @@ Local validation requires Node.js 22.12+:
     npm run check
     npm run build
 
+### Pull request readiness
+
+The protected default branch accepts changes through reviewed pull requests, not direct pushes. Before proposing a merge, confirm the required check contexts are successful: validate, Semgrep, gitleaks, OSV-Scanner, npm audit, and SBOM and hashes. Resolve applicable review threads and address substantive findings before the final review decision.
+
+Use squash merge for accepted changes. Passing automated checks or receiving a review recommendation does not authorize merging; an explicit maintainer decision is a separate gate.
+
 The release workflow separately validates the minimal packed runtime artifact, SBOM and hashes. Do not change package allowlists to include private operator notes, generated source maps, secrets or test artifacts.
 
 Do not commit credentials, personal host paths, real Microsoft 365 data or live token material. Follow SECURITY.md to report vulnerabilities privately. Pull-request reviews and merge approval remain distinct gates.
