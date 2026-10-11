@@ -8,7 +8,7 @@
 
 - [ ] No credentials, real tenant data, personal host paths, or other private material added.
 - [ ] The retrieval-only boundary and fixed Graph origin remain intact.
-- [ ] If the tool catalog changed, handlers, schemas, endpoints.json, TOOL_SURFACE.md, PERMISSIONS.md, and tests are consistent; otherwise N/A.
+- [ ] If the tool catalog changed, handlers, schemas, endpoints.json, catalog-summary.json, TOOL_SURFACE.md, PERMISSIONS.md, and tests are consistent; otherwise N/A.
 
 ## Validation
 
