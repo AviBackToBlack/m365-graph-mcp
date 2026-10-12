@@ -95,11 +95,28 @@ export function buildPath(
 
 /** Encodes a query, keeping Graph `$` option names literal. Spaces become %20. */
 export function buildQuery(query: QueryParams = {}): string {
+  // QueryParams is a TypeScript type, not a runtime trust boundary. Reject invalid
+  // records and values before String() can silently coerce arrays/objects into
+  // Graph options (for example, $select: ["id", "subject"] -> "id,subject").
+  if (
+    query === null ||
+    typeof query !== "object" ||
+    Array.isArray(query) ||
+    (Object.getPrototypeOf(query) !== Object.prototype && Object.getPrototypeOf(query) !== null)
+  ) {
+    throw new GraphClientError("invalid_input", "Query parameters must be a plain record.");
+  }
   const parts: string[] = [];
   for (const [name, value] of Object.entries(query)) {
     if (value === undefined) continue;
     if (!QUERY_NAME_RE.test(name)) {
       throw new GraphClientError("invalid_input", "Invalid query parameter name.");
+    }
+    if (typeof value !== "string" && typeof value !== "boolean" && typeof value !== "number") {
+      throw new GraphClientError(
+        "invalid_input",
+        `Query parameter ${name} must be a string, boolean, or finite number.`,
+      );
     }
     if (typeof value === "number" && !Number.isFinite(value)) {
       throw new GraphClientError(
