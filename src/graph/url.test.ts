@@ -174,6 +174,57 @@ describe("buildQuery / buildUrl", () => {
     expect(code(() => buildQuery({ $top: Number.NaN }))).toBe("invalid_input");
   });
 
+  it.each([
+    ["array", ["id", "subject"]],
+    ["null", null],
+    ["object", { id: "subject" }],
+    ["bigint", 7n],
+    ["symbol", Symbol("injected")],
+    ["function", () => "id"],
+  ])("rejects non-scalar runtime query value %s rather than coercing it", (_label, value) => {
+    // Compile-time QueryValue cannot enforce safety for untrusted runtime inputs.
+    const query = { $select: value } as unknown as Parameters<typeof buildQuery>[0];
+    expect(code(() => buildQuery(query))).toBe("invalid_input");
+  });
+
+  it.each([
+    ["null", null],
+    ["array", []],
+    ["string", "query"],
+    ["number", 7],
+    ["Date", new Date("2026-01-01T00:00:00Z")],
+  ])("rejects a non-record runtime query %s", (_label, value) => {
+    const query = value as unknown as Parameters<typeof buildQuery>[0];
+    expect(code(() => buildQuery(query))).toBe("invalid_input");
+  });
+
+  it("permits omitted and null-prototype plain query records", () => {
+    expect(buildQuery()).toBe("");
+    const query = Object.assign(Object.create(null) as Record<string, string>, { $top: "10" });
+    expect(buildQuery(query)).toBe("$top=10");
+  });
+
+  it("bounds diagnostics for oversized query names without echoing user input", () => {
+    const hugeName = "$" + "x".repeat(100_000);
+    const query = { [hugeName]: [] } as unknown as Parameters<typeof buildQuery>[0];
+    let error: unknown;
+    try {
+      buildQuery(query);
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(GraphClientError);
+    expect((error as GraphClientError).code).toBe("invalid_input");
+    expect((error as GraphClientError).message.length).toBeLessThan(256);
+    expect((error as GraphClientError).message).not.toContain(hugeName);
+  });
+
+  it("preserves valid scalar query types and omitted keys", () => {
+    expect(buildQuery({ $top: 0, $count: false, $filter: "a eq 'b'", skip: undefined })).toBe(
+      "$top=0&$count=false&$filter=a%20eq%20'b'",
+    );
+  });
+
   it("builds on the fixed origin with version prefix and caps length", () => {
     expect(buildUrl("v1.0", "/me", { $top: 1 })).toBe("https://graph.microsoft.com/v1.0/me?$top=1");
     expect(buildUrl("beta", "/me/profile", undefined)).toBe(
@@ -229,6 +280,22 @@ describe("validateGraphLink", () => {
       ["$expand=attachments($select=id,contentBytes)", { $expand: "attachments($select=id)" }],
     ])("refuses %j (original %j)", (q, original) => {
       expect(() => check(q, original)).toThrow(GraphClientError);
+    });
+
+    it("rejects invalid original query values even when the link only carries paging state", () => {
+      const continuation = link("$skip=10");
+      for (const value of [[], { id: "subject" }, null, 8n, Symbol("oops")]) {
+        const original = { $select: value } as unknown as Parameters<typeof validateGraphLink>[4];
+        expect(code(() => validateGraphLink(continuation, MESSAGES, "v1.0", INBOX, original))).toBe(
+          "invalid_input",
+        );
+      }
+      const badRecord = new Date("2026-01-01T00:00:00Z") as unknown as Parameters<
+        typeof validateGraphLink
+      >[4];
+      expect(code(() => validateGraphLink(continuation, MESSAGES, "v1.0", INBOX, badRecord))).toBe(
+        "invalid_input",
+      );
     });
 
     it("does not compare query options when no original query is given (delta token extraction)", () => {

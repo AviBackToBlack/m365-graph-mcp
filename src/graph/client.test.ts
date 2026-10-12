@@ -90,6 +90,17 @@ describe("routing and allowlist", () => {
     expect(authOf(calls[0] as Call)).toBe(`Bearer ${TOKEN}`);
   });
 
+  it("rejects runtime-invalid query values before acquiring a bearer or making a request", async () => {
+    const { client, calls, tokenCalls } = setup(() => json({ value: [] }));
+    for (const value of [["id", "subject"], null, { id: "subject" }]) {
+      const query = { $select: value } as unknown as NonNullable<GraphRequest["query"]>;
+      const err = await fail(client.request({ pathPattern: "/me/messages", query }));
+      expect(err.code).toBe("invalid_input");
+    }
+    expect(calls).toHaveLength(0);
+    expect(tokenCalls()).toBe(0);
+  });
+
   it("uses beta only for catalog beta entries and refuses mismatches", async () => {
     const { client, calls } = setup(() => json({}));
     await client.request({ pathPattern: "/me/profile" });
@@ -530,6 +541,18 @@ describe("pagination hardening", () => {
     }
     await client.fetchLink(base, `${G}/v1.0/me/messages?$skip=2`);
     expect(headersOf(calls[2])["ConsistencyLevel"]).toBe("eventual");
+  });
+
+  it("rejects invalid fetchLink base queries before any bearer or network I/O", async () => {
+    const { client, calls, tokenCalls } = setup(() => json({ value: [] }));
+    const link = `${G}/v1.0/me/messages?$skip=10`;
+    for (const value of [[], { id: "subject" }, null, 9n, Symbol("bad")]) {
+      const query = { $select: value } as unknown as NonNullable<GraphRequest["query"]>;
+      const err = await fail(client.fetchLink({ pathPattern: "/me/messages", query }, link));
+      expect(err.code).toBe("invalid_input");
+    }
+    expect(calls).toHaveLength(0);
+    expect(tokenCalls()).toBe(0);
   });
 
   it("still rejects disallowed headers on fetchLink without any network call", async () => {

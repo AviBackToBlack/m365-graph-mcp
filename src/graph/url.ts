@@ -9,6 +9,9 @@ export type GraphVersion = "v1.0" | "beta";
 const MAX_URL_LENGTH = 8192;
 const PARAM_RE = /\{([^{}/]+)\}/g;
 const QUERY_NAME_RE = /^[$A-Za-z][A-Za-z0-9_.-]*$/;
+// Real Graph query names are short, fixed names. Bound diagnostics for malformed
+// runtime input before interpolating any accepted name into an error message.
+const MAX_QUERY_NAME_LENGTH = 128;
 // eslint-disable-next-line no-control-regex
 const UNSAFE_RAW_RE = /[\u0000- \u007f\\#]/;
 
@@ -95,11 +98,28 @@ export function buildPath(
 
 /** Encodes a query, keeping Graph `$` option names literal. Spaces become %20. */
 export function buildQuery(query: QueryParams = {}): string {
+  // QueryParams is a TypeScript type, not a runtime trust boundary. Reject invalid
+  // records and values before String() can silently coerce arrays/objects into
+  // Graph options (for example, $select: ["id", "subject"] -> "id,subject").
+  if (
+    query === null ||
+    typeof query !== "object" ||
+    Array.isArray(query) ||
+    (Object.getPrototypeOf(query) !== Object.prototype && Object.getPrototypeOf(query) !== null)
+  ) {
+    throw new GraphClientError("invalid_input", "Query parameters must be a plain record.");
+  }
   const parts: string[] = [];
   for (const [name, value] of Object.entries(query)) {
     if (value === undefined) continue;
-    if (!QUERY_NAME_RE.test(name)) {
+    if (name.length > MAX_QUERY_NAME_LENGTH || !QUERY_NAME_RE.test(name)) {
       throw new GraphClientError("invalid_input", "Invalid query parameter name.");
+    }
+    if (typeof value !== "string" && typeof value !== "boolean" && typeof value !== "number") {
+      throw new GraphClientError(
+        "invalid_input",
+        `Query parameter ${name} must be a string, boolean, or finite number.`,
+      );
     }
     if (typeof value === "number" && !Number.isFinite(value)) {
       throw new GraphClientError(
@@ -325,6 +345,10 @@ export function validateGraphLink(
   });
 
   if (originalQuery !== undefined) {
+    // The continuation does not rebuild the original URL, but it must enforce
+    // the exact same runtime query contract before linkWidensQuery() examines
+    // values; otherwise String(array/object) silently widens the input boundary.
+    buildQuery(originalQuery);
     const reason = linkWidensQuery(parsed.searchParams, originalQuery);
     if (reason !== undefined) throw linkError(reason);
   }
