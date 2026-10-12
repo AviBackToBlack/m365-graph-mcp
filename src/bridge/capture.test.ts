@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CdpPipe } from "./cdp-pipe.js";
 import { GraphExplorerCapture, extractBearer, isGraphExplorerUrl } from "./capture.js";
 import type { CaptureDiagnostic } from "./capture.js";
@@ -440,48 +440,76 @@ describe("capture: claim release, re-attachment and attach race", () => {
     sent(e, "Target.attachToTarget").map((m) => (m.params as { targetId: string }).targetId);
 
   it("retries a failed attach after the delay, so an idle signed-in page is still claimed", async () => {
-    const e = await setup({ attachFails: true, attachRetryMs: 5 });
-    expect(e.diags.some((d) => d.kind === "attach_failed")).toBe(true);
-    expect(attachedTargets(e)).toEqual(["T1"]);
-    // The page stays idle (no further target events); the retry rescans and attaches.
-    e.peer.on("Target.attachToTarget", () => ({ sessionId: "S1" }));
-    await new Promise((r) => setTimeout(r, 40));
-    await flush();
-    expect(attachedTargets(e)).toEqual(["T1", "T1"]);
-    const t = jwt();
-    request(e, "a", t);
-    respond(e, "a", 200);
-    await flush();
-    expect(e.cap.current()).toMatchObject({ state: "ok", token: t });
+    // Freeze retry timers while setup awaits CDP traffic: a real 5-ms timeout may fire before
+    // the first assertion on a busy runner, causing a spurious duplicate attach.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let e: Env | undefined;
+    try {
+      e = await setup({ attachFails: true, attachRetryMs: 5 });
+      expect(e.diags.some((d) => d.kind === "attach_failed")).toBe(true);
+      expect(attachedTargets(e)).toEqual(["T1"]);
+      // The page stays idle (no further target events); only advancing the retry clock
+      // causes a rescan, proving that the retry does not depend on incidental wall-clock delays.
+      e.peer.on("Target.attachToTarget", () => ({ sessionId: "S1" }));
+      await vi.advanceTimersByTimeAsync(5);
+      await flush();
+      expect(attachedTargets(e)).toEqual(["T1", "T1"]);
+      const t = jwt();
+      request(e, "a", t);
+      respond(e, "a", 200);
+      await flush();
+      expect(e.cap.current()).toMatchObject({ state: "ok", token: t });
+    } finally {
+      e?.cap.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("retries a rescan whose Target.getTargets failed", async () => {
-    const e = await setup({ attachRetryMs: 5 });
-    let failOnce = true;
-    e.peer.on("Target.getTargets", (m) => {
-      if (failOnce) {
-        failOnce = false;
-        e.peer.writeFrame({ id: m.id, error: { code: -32000, message: "busy" } });
-        return {};
-      }
-      return { targetInfos: [{ targetId: "T2", type: "page", url: GE }] };
-    });
-    e.peer.on("Target.attachToTarget", () => ({ sessionId: "S2" }));
-    navigate(e, "T1", "https://login.microsoftonline.com/x"); // release -> rescan fails
-    await flush();
-    expect(attachedTargets(e)).toEqual(["T1"]);
-    await new Promise((r) => setTimeout(r, 40));
-    await flush();
-    expect(attachedTargets(e)).toEqual(["T1", "T2"]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let e: Env | undefined;
+    try {
+      e = await setup({ attachRetryMs: 5 });
+      const peer = e.peer;
+      let failOnce = true;
+      peer.on("Target.getTargets", (m) => {
+        if (failOnce) {
+          failOnce = false;
+          peer.writeFrame({ id: m.id, error: { code: -32000, message: "busy" } });
+          return {};
+        }
+        return { targetInfos: [{ targetId: "T2", type: "page", url: GE }] };
+      });
+      e.peer.on("Target.attachToTarget", () => ({ sessionId: "S2" }));
+      navigate(e, "T1", "https://login.microsoftonline.com/x"); // release -> rescan fails
+      await flush();
+      expect(attachedTargets(e)).toEqual(["T1"]);
+      // Advance only after verifying the failed rescan did not attach a target.
+      await vi.advanceTimersByTimeAsync(5);
+      await flush();
+      expect(attachedTargets(e)).toEqual(["T1", "T2"]);
+    } finally {
+      e?.cap.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("does not retry after stop()", async () => {
-    const e = await setup({ attachFails: true, attachRetryMs: 5 });
-    e.cap.stop();
-    e.peer.on("Target.attachToTarget", () => ({ sessionId: "S1" }));
-    await new Promise((r) => setTimeout(r, 40));
-    await flush();
-    expect(attachedTargets(e)).toEqual(["T1"]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let e: Env | undefined;
+    try {
+      e = await setup({ attachFails: true, attachRetryMs: 5 });
+      expect(attachedTargets(e)).toEqual(["T1"]);
+      e.cap.stop();
+      e.peer.on("Target.attachToTarget", () => ({ sessionId: "S1" }));
+      // Even after the retry deadline, stopping must prevent another attach.
+      await vi.advanceTimersByTimeAsync(5);
+      await flush();
+      expect(attachedTargets(e)).toEqual(["T1"]);
+    } finally {
+      e?.cap.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("releases the claim when the page navigates away and attaches another Graph Explorer page", async () => {
