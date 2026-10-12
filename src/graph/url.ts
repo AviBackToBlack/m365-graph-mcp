@@ -9,6 +9,9 @@ export type GraphVersion = "v1.0" | "beta";
 const MAX_URL_LENGTH = 8192;
 const PARAM_RE = /\{([^{}/]+)\}/g;
 const QUERY_NAME_RE = /^[$A-Za-z][A-Za-z0-9_.-]*$/;
+// Real Graph query names are short, fixed names. Bound diagnostics for malformed
+// runtime input before interpolating any accepted name into an error message.
+const MAX_QUERY_NAME_LENGTH = 128;
 // eslint-disable-next-line no-control-regex
 const UNSAFE_RAW_RE = /[\u0000- \u007f\\#]/;
 
@@ -109,7 +112,7 @@ export function buildQuery(query: QueryParams = {}): string {
   const parts: string[] = [];
   for (const [name, value] of Object.entries(query)) {
     if (value === undefined) continue;
-    if (!QUERY_NAME_RE.test(name)) {
+    if (name.length > MAX_QUERY_NAME_LENGTH || !QUERY_NAME_RE.test(name)) {
       throw new GraphClientError("invalid_input", "Invalid query parameter name.");
     }
     if (typeof value !== "string" && typeof value !== "boolean" && typeof value !== "number") {
@@ -342,6 +345,10 @@ export function validateGraphLink(
   });
 
   if (originalQuery !== undefined) {
+    // The continuation does not rebuild the original URL, but it must enforce
+    // the exact same runtime query contract before linkWidensQuery() examines
+    // values; otherwise String(array/object) silently widens the input boundary.
+    buildQuery(originalQuery);
     const reason = linkWidensQuery(parsed.searchParams, originalQuery);
     if (reason !== undefined) throw linkError(reason);
   }
