@@ -46,7 +46,7 @@ export function assertIpcPath(p: unknown, options: IpcPathOptions = {}): asserts
       "On Windows only an explicitly enabled development named pipe is supported.",
     );
   }
-  if (!path.isAbsolute(p) || p.startsWith("\\\\")) {
+  if (!path.posix.isAbsolute(p) || p.startsWith("\\\\")) {
     throw new IpcPathError(
       "IPC endpoint must be an absolute filesystem path (never a port or host).",
     );

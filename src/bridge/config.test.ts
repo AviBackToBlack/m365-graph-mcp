@@ -104,6 +104,13 @@ describe("assertIpcPath", () => {
     },
   );
 
+  it("rejects Windows drive-absolute IPC paths when simulating macOS or Linux", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(() => assertIpcPath("C:\\Users\\someone\\bridge.sock", { platform })).toThrow(
+        IpcPathError,
+      );
+    }
+  });
   it("permits dev pipes only on win32 behind the explicit flag", () => {
     const pipe = "\\\\.\\pipe\\m365-dev";
     expect(() => assertIpcPath(pipe, { platform: "win32" })).toThrow(IpcPathError);
@@ -126,6 +133,31 @@ describe("assertIpcPath", () => {
 });
 
 describe("resolveBridgeEndpoint (shared with the MCP bridge token source, D45)", () => {
+  it("uses target-platform absolute path rules regardless of the development host", () => {
+    const devPipe = "\\\\.\\pipe\\m365-dev";
+    const win = resolveBridgeEndpoint({
+      env: { M365_GRAPH_BRIDGE_DIR: "C:\\bridge", M365_GRAPH_BRIDGE_DEV_PIPE: devPipe },
+      platform: "win32",
+    });
+    expect(win).toEqual({
+      runtimeDir: "C:\\bridge",
+      socketPath: devPipe,
+      allowDevPipe: true,
+    });
+    expect(() =>
+      resolveBridgeEndpoint({ env: { M365_GRAPH_BRIDGE_DIR: "C:\\bridge" }, platform: "darwin" }),
+    ).toThrow(BridgeConfigError);
+    expect(() =>
+      resolveBridgeEndpoint({ env: { M365_GRAPH_BRIDGE_DIR: "C:\\bridge" }, platform: "linux" }),
+    ).toThrow(BridgeConfigError);
+    expect(() =>
+      resolveBridgeEndpoint({
+        env: {},
+        platform: "darwin",
+        homedir: "C:\\Users\\simulated-windows-host",
+      }),
+    ).toThrow(BridgeConfigError);
+  });
   it("does not require M365_GRAPH_TENANT_ID or read any tenant variable", () => {
     const e = resolveBridgeEndpoint({
       env: { M365_GRAPH_BRIDGE_DIR: "/tmp/mb", M365_TENANT_ID: "ignored" },

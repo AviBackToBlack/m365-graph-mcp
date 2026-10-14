@@ -22,13 +22,17 @@ sha=eedf75b038be17420553773a42ef19f2f9aca45b
 bundle="$HOME/Downloads/m365-graph-mcp-pilot-$run"
 test "$(gh run view "$run" -R "$repo" --json headSha --jq .headSha)" = "$sha"
 test "$(gh run view "$run" -R "$repo" --json conclusion --jq .conclusion)" = success
-mkdir -p "$bundle"
+# A reused download directory may contain an extra unverified tarball: fail closed.
+test ! -e "$bundle"
+mkdir -m 700 "$bundle"
 gh run download "$run" -R "$repo" -n package-sbom-sha256 -D "$bundle"
 cd "$bundle"
 shasum -a 256 -c SHA256SUMS
 set -- ./*.tgz
-test "$#" -eq 1 && test -f "$1"
-gh attestation verify "$1" -R "$repo"
+test "$#" -eq 1
+test -f "$1"
+tarball="$1"
+gh attestation verify "$tarball" -R "$repo"
 ```
 
 **Stop** if artifact retrieval, checksum or GitHub attestation fails. This is a GitHub-attested build from the pinned source SHA, not an unspecified latest npm package.
@@ -39,7 +43,7 @@ gh attestation verify "$1" -R "$repo"
 set -euo pipefail
 install_root="$HOME/Library/Application Support/m365-graph-mcp-runtime"
 mkdir -p "$install_root"
-npm install --prefix "$install_root" --ignore-scripts --no-audit --no-fund "$bundle"/*.tgz
+npm install --prefix "$install_root" --ignore-scripts --no-audit --no-fund "$bundle/$tarball"
 server_js="$install_root/node_modules/m365-graph-mcp/dist/index.js"
 bridge_js="$install_root/node_modules/m365-graph-mcp/dist/bridge/main.js"
 test -f "$server_js" && test -f "$bridge_js"
@@ -52,10 +56,12 @@ Copy the *actual absolute paths* printed here into the next steps. Do not assume
 
 ## 3. Run the bridge in a separate Terminal
 
-Set the corporate tenant GUID **only in the bridge process**, replacing the placeholder locally:
+Set the corporate tenant GUID **only in the bridge process**. This is a **new Terminal**;
+variables from steps 1-2 do not exist here. Replace **all three placeholders** with
+the tenant GUID and the exact absolute Node/Bridge paths printed by step 2:
 
 ```sh
-M365_GRAPH_TENANT_ID='<CORPORATE-TENANT-GUID>' "$node_bin" "$bridge_js"
+M365_GRAPH_TENANT_ID='<CORPORATE-TENANT-GUID>' '<ABSOLUTE-NODE-PATH>' '<ABSOLUTE-BRIDGE-JS-PATH>'
 ```
 
 The bridge starts a dedicated Chrome/Edge profile. Complete Graph Explorer SSO/MFA *inside that browser* and run a permitted Graph request there (for example GET /me) so the bridge can observe a Graph-bound bearer. **Never copy or display the bearer.** Keep the bridge Terminal running during the pilot. The broker uses an owner-restricted local Unix socket, never TCP.
