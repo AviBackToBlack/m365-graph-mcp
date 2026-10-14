@@ -79,22 +79,23 @@ export interface BridgeEndpoint {
 export function resolveBridgeEndpoint(options: BridgeConfigOptions = {}): BridgeEndpoint {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
+  const targetPath = platform === "win32" ? path.win32 : path.posix;
   const home = options.homedir ?? os.homedir();
 
   const override = clean(env[BRIDGE_DIR_ENV]);
   let runtimeDir: string;
   if (override !== undefined) {
-    if (!path.isAbsolute(override)) {
+    if (!targetPath.isAbsolute(override)) {
       throw new BridgeConfigError(`${BRIDGE_DIR_ENV} must be an absolute path.`);
     }
     runtimeDir = override;
   } else if (platform === "darwin") {
-    runtimeDir = path.join(home, "Library", "Application Support", APP_DIR_NAME);
+    runtimeDir = targetPath.join(home, "Library", "Application Support", APP_DIR_NAME);
   } else {
     throw new BridgeConfigError(`${BRIDGE_DIR_ENV} is required on this platform.`);
   }
 
-  let socketPath = path.join(runtimeDir, SOCKET_FILE_NAME);
+  let socketPath = targetPath.join(runtimeDir, SOCKET_FILE_NAME);
   const devPipe = clean(env[BRIDGE_DEV_PIPE_ENV]);
   if (devPipe !== undefined) {
     if (platform !== "win32") {

@@ -63,7 +63,7 @@ describe("bridge config", () => {
       homedir: "/Users/someone",
     });
     expect(c.runtimeDir).toBe(
-      path.join("/Users/someone", "Library", "Application Support", "m365-bridge"),
+      path.posix.join("/Users/someone", "Library", "Application Support", "m365-bridge"),
     );
     expect(c.socketPath.endsWith("b.sock")).toBe(true);
     expect(Buffer.byteLength(c.socketPath)).toBeLessThanOrEqual(MAX_SOCKET_PATH_BYTES);
@@ -132,7 +132,7 @@ describe("resolveBridgeEndpoint (shared with the MCP bridge token source, D45)",
       platform: "linux",
     });
     expect(e.runtimeDir).toBe("/tmp/mb");
-    expect(e.socketPath).toBe(path.join("/tmp/mb", "b.sock"));
+    expect(e.socketPath).toBe(path.posix.join("/tmp/mb", "b.sock"));
     expect(e.allowDevPipe).toBeUndefined();
   });
 
@@ -155,7 +155,7 @@ describe("resolveBridgeEndpoint (shared with the MCP bridge token source, D45)",
   it("applies the same macOS default, dev-pipe and path rules", () => {
     expect(
       resolveBridgeEndpoint({ env: {}, platform: "darwin", homedir: "/Users/someone" }).runtimeDir,
-    ).toBe(path.join("/Users/someone", "Library", "Application Support", "m365-bridge"));
+    ).toBe(path.posix.join("/Users/someone", "Library", "Application Support", "m365-bridge"));
     expect(() => resolveBridgeEndpoint({ env: {}, platform: "linux" })).toThrow(BridgeConfigError);
     expect(() =>
       resolveBridgeEndpoint({
