@@ -57,6 +57,9 @@ The bridge opens its own browser profile for Graph Explorer login/MFA and observ
 
 See [`docs/macos-sm15-acceptance.md`](./docs/macos-sm15-acceptance.md) for the non-secret macOS verification workflow.
 
+A **supervised macOS + Claude Desktop pilot** can be installed from a pinned, checksum-verified and GitHub-attested CI tarball: see [`docs/macos-first-run.md`](./docs/macos-first-run.md). This is not an npm release or a completed macOS acceptance.
+
+
 ## Permissions, capabilities, and limitations
 
 [`PERMISSIONS.md`](./PERMISSIONS.md) lists the catalog's declared delegated scope hints. Actual availability depends on Microsoft Graph endpoint capabilities, your delegated consent and your tenant's access policy. Some selected endpoints are unavailable under certain permission sets. A Graph 401 or 403 is surfaced as a typed error; it is not a reason to broaden scopes automatically.
